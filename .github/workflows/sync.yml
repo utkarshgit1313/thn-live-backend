@@ -1,0 +1,40 @@
+name: Sync YouTube to Archive
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # हर 6 घंटे में अपने आप चलेगा
+  workflow_dispatch: # मैन्युअल बटन से चलाने के लिए
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install yt-dlp internetarchive
+
+      - name: Run Sync Script
+        env:
+          PLAYLIST_URL: ${{ secrets.PLAYLIST_URL }}
+          ARCHIVE_ACCESS_KEY: ${{ secrets.ARCHIVE_ACCESS_KEY }}
+          ARCHIVE_SECRET_KEY: ${{ secrets.ARCHIVE_SECRET_KEY }}
+        run: python sync.py
+
+      - name: Commit and push episodes.json
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add episodes.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update episodes.json" && git push)
