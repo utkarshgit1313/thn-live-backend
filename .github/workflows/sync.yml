@@ -1,9 +1,9 @@
-name: Sync YouTube to Archive
+name: Sync Archive with YouTube Metadata
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
-  workflow_dispatch:
+    - cron: '0 */3 * * *' # हर 3 घंटे में अपने आप चलेगा
+  workflow_dispatch: # मैन्युअल बटन से तुरंत चलाने के लिए
 
 permissions:
   contents: write
@@ -20,26 +20,13 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Deno (JS Runtime for yt-dlp)
-        uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
-
       - name: Install dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install -y ffmpeg
-          pip install -U yt-dlp internetarchive
+        run: pip install -U yt-dlp internetarchive
 
       - name: Run Sync Script
         env:
           PLAYLIST_URL: ${{ secrets.PLAYLIST_URL }}
-          ARCHIVE_ACCESS_KEY: ${{ secrets.ARCHIVE_ACCESS_KEY }}
-          ARCHIVE_SECRET_KEY: ${{ secrets.ARCHIVE_SECRET_KEY }}
-          YT_COOKIES: ${{ secrets.YT_COOKIES }}
-        run: |
-          echo "$YT_COOKIES" > cookies.txt
-          python sync.py
-          rm -f cookies.txt
+        run: python sync.py
 
       - name: Commit and push episodes.json
         run: |
