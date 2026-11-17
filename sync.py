@@ -17,7 +17,7 @@ ARCHIVE_USERNAME = "utkarsh_prajapati383"
 def clean_text(text):
     return re.sub(r'\s+', ' ', re.sub(r'[^\w\s\u0900-\u097F]', ' ', text)).strip().lower()
 
-# 1. YouTube प्लेलिस्ट के सभी वीडियो (Avtar Bani + Special Live) और उनकी Exact Date & Time लें
+# 1. YouTube प्लेलिस्ट के सभी वीडियो और उनकी Exact Date & Time लें
 yt_videos = {}
 if PLAYLIST_URL:
     cmd = ["yt-dlp", "--flat-playlist", "--playlist-end", "100", "-J", PLAYLIST_URL]
@@ -53,7 +53,7 @@ if PLAYLIST_URL:
                 "playlist_order": idx
             }
 
-    # YouTube RSS Feed से Exact Publish Date & Time (घंटे और मिनट सहित) निकालें
+    # YouTube RSS Feed से Exact Publish Date & Time (घंटे और मिनट सहित) लें
     list_match = re.search(r"list=([a-zA-Z0-9_-]+)", PLAYLIST_URL)
     if list_match:
         rss_url = f"https://www.youtube.com/feeds/videos.xml?playlist_id={list_match.group(1)}"
@@ -71,25 +71,34 @@ if PLAYLIST_URL:
 
 print(f"Fetched {len(yt_videos)} valid videos from YouTube playlist.")
 
-# 2. सीधे आपके Archive प्रोफ़ाइल पेज से सभी अपलोड्स निकालें (कोई भी नाम हो, सब आएगा)
-identifiers = []
-try:
-    profile_url = f"https://archive.org/details/@{ARCHIVE_USERNAME}?output=json"
-    req = urllib.request.Request(profile_url, headers={"User-Agent": "Mozilla/5.0"})
-    profile_data = json.loads(urllib.request.urlopen(req, timeout=15).read().decode("utf-8"))
-    for doc in profile_data.get("response", {}).get("docs", []):
-        if doc.get("identifier"):
-            identifiers.append(doc["identifier"])
-except Exception as e:
-    print(f"Profile JSON fetch note: {e}")
-
-# बैकअप के लिए API सर्च भी चलाएं
+# 2. आपके Archive अकाउंट से सभी अपलोड्स निकालें (Tasks API + Search दोनों से)
+identifiers = set()
 session = ia.get_session(config={"s3": {"access": ACCESS_KEY, "secret": SECRET_KEY}})
-for item in session.search_items(f'uploader:"{ARCHIVE_USERNAME}" OR creator:"The Humility Nirankari"'):
-    if item.get("identifier") and item["identifier"] not in identifiers:
-        identifiers.append(item["identifier"])
 
-print(f"Found {len(identifiers)} total uploads on your Archive profile.")
+# A) आपकी S3 Keys से सीधे आपके अकाउंट के Tasks/History से सारे अपलोड्स लाएं (तुरंत काम करता है, चाहे कोई भी नाम हो)
+try:
+    tasks_url = "https://archive.org/services/tasks.php?limit=200&history=1"
+    req = urllib.request.Request(tasks_url, headers={
+        "Authorization": f"LOW {ACCESS_KEY}:{SECRET_KEY}",
+        "User-Agent": "THN-Live-Sync/1.0"
+    })
+    tasks_data = json.loads(urllib.request.urlopen(req, timeout=15).read().decode("utf-8"))
+    for task in tasks_data.get("value", {}).get("history", []):
+        if task.get("identifier"):
+            identifiers.add(task["identifier"])
+    for task in tasks_data.get("value", {}).get("tasks", []):
+        if task.get("identifier"):
+            identifiers.add(task["identifier"])
+except Exception as e:
+    print(f"Tasks API note: {e}")
+
+# B) साथ ही वही पुरानी सर्च भी रखें जिससे पहले आइटम मिले थे + Special Live के लिए भी
+search_query = f'uploader:"{ARCHIVE_USERNAME}" OR creator:"The Humility Nirankari" OR title:"The Humility Nirankari" OR title:"Sampurn Avtar Bani"'
+for item in session.search_items(search_query):
+    if item.get("identifier"):
+        identifiers.add(item["identifier"])
+
+print(f"Found {len(identifiers)} unique identifiers on your Archive account: {list(identifiers)}")
 
 episodes = []
 matched_video_ids = set()
@@ -116,7 +125,7 @@ for identifier in identifiers:
         print(f"Skipping {identifier}: {e}")
         continue
 
-    # 3. YouTube प्लेलिस्ट के किसी भी वीडियो (Avtar Bani या Special Live) से टाइटल मैच करें
+    # 3. Strict Playlist Filter: केवल YouTube प्लेलिस्ट वाले वीडियो ही जुड़ेंगे ('Story Time' बाहर हो जाएगा)
     clean_ia = clean_text(ia_title)
     best_match = None
     best_score = 0.0
@@ -141,7 +150,7 @@ for identifier in identifiers:
             "audio_url": audio_url,
             "_order": best_match["playlist_order"]
         })
-        print(f"Matched [{best_score:.2f}]: '{ia_title}' -> '{best_match['title']}'")
+        print(f"Matched [{best_score:.2f}]: '{ia_title}' -> '{best_match['title']}' ({final_date})")
     else:
         print(f"Ignored (Not in playlist): '{ia_title}' (Best score: {best_score:.2f})")
 
