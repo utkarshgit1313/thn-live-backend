@@ -26,6 +26,8 @@ jobs:
       - name: Run Sync Script
         env:
           PLAYLIST_URL: ${{ secrets.PLAYLIST_URL }}
+          ARCHIVE_ACCESS_KEY: ${{ secrets.ARCHIVE_ACCESS_KEY }}
+          ARCHIVE_SECRET_KEY: ${{ secrets.ARCHIVE_SECRET_KEY }}
         run: python sync.py
 
       - name: Commit and push episodes.json
