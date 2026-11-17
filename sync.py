@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import subprocess
 import internetarchive as ia
 
@@ -10,9 +11,15 @@ EPISODES_FILE = "episodes.json"
 
 cookie_exists = os.path.exists("cookies.txt") and os.path.getsize("cookies.txt") > 10
 print(f"Cookie file ready: {cookie_exists}")
-print(f"Playlist URL length: {len(PLAYLIST_URL)}")
 
-COOKIE_ARGS = ["--cookies", "cookies.txt"] if cookie_exists else []
+BASE_ARGS = [
+    "yt-dlp",
+    "--sleep-requests", "2",
+    "--sleep-interval", "5",
+    "--max-sleep-interval", "10",
+]
+if cookie_exists:
+    BASE_ARGS += ["--cookies", "cookies.txt"]
 
 if os.path.exists(EPISODES_FILE):
     with open(EPISODES_FILE, "r", encoding="utf-8") as f:
@@ -23,10 +30,9 @@ else:
 uploaded_ids = {ep["video_id"] for ep in episodes}
 
 cmd = [
-    "yt-dlp",
-    *COOKIE_ARGS,
+    *BASE_ARGS,
     "--flat-playlist",
-    "--playlist-end", "5",
+    "--playlist-end", "3",
     "-J",
     PLAYLIST_URL
 ]
@@ -39,19 +45,16 @@ playlist_data = json.loads(result.stdout)
 entries = playlist_data.get("entries", [])
 print(f"Total entries found in playlist: {len(entries)}")
 
-if not entries:
-    print("Raw output:", result.stdout[:500])
-
 for entry in reversed(entries):
     vid = entry.get("id")
-    print(f"Checking video ID: {vid}")
     if not vid or vid in uploaded_ids:
         continue
 
     video_url = f"https://www.youtube.com/watch?v={vid}"
     print(f"Processing new video: {video_url}")
+    time.sleep(5)
 
-    info_cmd = ["yt-dlp", *COOKIE_ARGS, "-j", video_url]
+    info_cmd = [*BASE_ARGS, "-j", video_url]
     info_res = subprocess.run(info_cmd, capture_output=True, text=True)
     if info_res.returncode != 0:
         print(f"ERROR getting video info for {vid}: {info_res.stderr}")
@@ -66,8 +69,7 @@ for entry in reversed(entries):
 
     mp3_filename = f"{vid}.mp3"
     dl_cmd = [
-        "yt-dlp",
-        *COOKIE_ARGS,
+        *BASE_ARGS,
         "-x",
         "--audio-format", "mp3",
         "--audio-quality", "128K",
