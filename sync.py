@@ -7,8 +7,8 @@ PLAYLIST_URL = os.environ.get("PLAYLIST_URL")
 ACCESS_KEY = os.environ.get("ARCHIVE_ACCESS_KEY")
 SECRET_KEY = os.environ.get("ARCHIVE_SECRET_KEY")
 EPISODES_FILE = "episodes.json"
+COOKIE_ARGS = ["--cookies", "cookies.txt"] if os.path.exists("cookies.txt") else []
 
-# मौजूदा episodes.json लोड करें ताकि पुराने वीडियो दोबारा अपलोड न हों
 if os.path.exists(EPISODES_FILE):
     with open(EPISODES_FILE, "r", encoding="utf-8") as f:
         episodes = json.load(f)
@@ -17,9 +17,9 @@ else:
 
 uploaded_ids = {ep["video_id"] for ep in episodes}
 
-# प्लेलिस्ट से लेटेस्ट 5 वीडियो की जानकारी निकालें
 cmd = [
     "yt-dlp",
+    *COOKIE_ARGS,
     "--flat-playlist",
     "--playlist-end", "5",
     "-J",
@@ -41,8 +41,7 @@ for entry in reversed(entries):
     video_url = f"https://www.youtube.com/watch?v={vid}"
     print(f"Processing new video: {video_url}")
 
-    # वीडियो की डिटेल्स और ऑडियो (MP3) डाउनलोड करें
-    info_cmd = ["yt-dlp", "-j", video_url]
+    info_cmd = ["yt-dlp", *COOKIE_ARGS, "-j", video_url]
     info_res = subprocess.run(info_cmd, capture_output=True, text=True)
     if info_res.returncode != 0:
         print(f"Skipping {vid}: {info_res.stderr}")
@@ -58,6 +57,7 @@ for entry in reversed(entries):
     mp3_filename = f"{vid}.mp3"
     dl_cmd = [
         "yt-dlp",
+        *COOKIE_ARGS,
         "-x",
         "--audio-format", "mp3",
         "--audio-quality", "128K",
@@ -66,7 +66,6 @@ for entry in reversed(entries):
     ]
     subprocess.run(dl_cmd, check=True)
 
-    # Internet Archive पर अपलोड करें
     identifier = f"thn-live-{vid}"
     metadata = {
         "title": title,
@@ -96,11 +95,9 @@ for entry in reversed(entries):
         "audio_url": audio_url
     })
 
-    # लोकल MP3 फाइल हटा दें
     if os.path.exists(mp3_filename):
         os.remove(mp3_filename)
 
-# अपडेटेड लिस्ट सेव करें
 with open(EPISODES_FILE, "w", encoding="utf-8") as f:
     json.dump(episodes, f, ensure_ascii=False, indent=2)
 
