@@ -2,8 +2,8 @@ name: Sync YouTube to Archive
 
 on:
   schedule:
-    - cron: '0 */6 * * *' # हर 6 घंटे में अपने आप चलेगा
-  workflow_dispatch: # मैन्युअल बटन से चलाने के लिए
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -23,14 +23,18 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
-          pip install yt-dlp internetarchive
+          pip install -U yt-dlp internetarchive
 
       - name: Run Sync Script
         env:
           PLAYLIST_URL: ${{ secrets.PLAYLIST_URL }}
           ARCHIVE_ACCESS_KEY: ${{ secrets.ARCHIVE_ACCESS_KEY }}
           ARCHIVE_SECRET_KEY: ${{ secrets.ARCHIVE_SECRET_KEY }}
-        run: python sync.py
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          echo "$YT_COOKIES" > cookies.txt
+          python sync.py
+          rm -f cookies.txt
 
       - name: Commit and push episodes.json
         run: |
