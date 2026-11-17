@@ -3,21 +3,25 @@ import json
 import re
 import difflib
 import subprocess
-import urllib.request
+import urllib.parse
 import internetarchive as ia
 
 PLAYLIST_URL = os.environ.get("PLAYLIST_URL", "").strip()
+ACCESS_KEY = os.environ.get("ARCHIVE_ACCESS_KEY", "").strip()
+SECRET_KEY = os.environ.get("ARCHIVE_SECRET_KEY", "").strip()
 EPISODES_FILE = "episodes.json"
-IA_CREATOR_SEARCH = "uploader:utkarsh_prajapati383" # आपका Archive यूज़रनेम
+
+# आपकी Archive प्रोफ़ाइल और अपलोड्स को खोजने के लिए सर्च क्वेरी
+IA_SEARCH_QUERY = 'uploader:"utkarsh_prajapati383" OR creator:"The Humility Nirankari" OR title:"The Humility Nirankari" OR title:"Nirankari Story Time"'
 
 def clean_text(text):
-    # मिलान आसान बनाने के लिए स्पेशल कैरेक्टर और एक्स्ट्रा स्पेस हटाएं
-    return re.sub(r'\s+', ' ', re.sub(r'[^\w\s\u0900-\u097F]', '', text)).strip().lower()
+    # || और अन्य स्पेशल कैरेक्टर हटाकर साफ टेक्स्ट बनाएं ताकि टाइटल आसानी से मैच हो
+    return re.sub(r'\s+', ' ', re.sub(r'[^\w\s\u0900-\u097F]', ' ', text)).strip().lower()
 
-# 1. YouTube प्लेलिस्ट से केवल मेटाडेटा (Title, Thumbnail, Duration) लें (इसमें YouTube कभी ब्लॉक नहीं करता)
+# 1. YouTube प्लेलिस्ट से मेटाडेटा लें
 yt_videos = []
 if PLAYLIST_URL:
-    cmd = ["yt-dlp", "--flat-playlist", "--playlist-end", "30", "-J", PLAYLIST_URL]
+    cmd = ["yt-dlp", "--flat-playlist", "--playlist-end", "50", "-J", PLAYLIST_URL]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode == 0:
         data = json.loads(res.stdout)
@@ -25,7 +29,6 @@ if PLAYLIST_URL:
             vid = entry.get("id")
             if not vid:
                 continue
-            # प्लेलिस्ट से थंबनेल और ड्यूरेशन निकालें
             thumbs = entry.get("thumbnails") or []
             thumb_url = thumbs[-1]["url"] if thumbs else f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
             dur_sec = entry.get("duration")
@@ -45,19 +48,28 @@ if PLAYLIST_URL:
 
 print(f"Fetched {len(yt_videos)} videos metadata from YouTube playlist.")
 
-# 2. आपके Internet Archive अकाउंट से सभी अपलोड किए गए ऑडियो आइटम्स निकालें
-search = ia.search_items(IA_CREATOR_SEARCH, fields=["identifier", "title", "date", "addeddate"], sorts=["addeddate desc"])
+# 2. Internet Archive से आइटम्स खोजें (Authentication के साथ)
+session = ia.get_session(config={"s3": {"access": ACCESS_KEY, "secret": SECRET_KEY}})
+search = session.search_items(IA_SEARCH_QUERY, fields=["identifier", "title", "date", "addeddate"], sorts=["addeddate desc"])
+
 episodes = []
+seen_identifiers = set()
 
 for item in search:
     identifier = item.get("identifier")
+    if not identifier or identifier in seen_identifiers:
+        continue
+    seen_identifiers.add(identifier)
+
     ia_title = item.get("title", identifier)
+    if isinstance(ia_title, list):
+        ia_title = ia_title[0]
+
     raw_date = item.get("date") or item.get("addeddate", "")
     formatted_date = raw_date[:10] if len(raw_date) >= 10 else ""
 
-    # Archive आइटम के अंदर से असली MP3/ऑडियो फाइल का डायरेक्ट लिंक खोजें
     try:
-        ia_item = ia.get_item(identifier)
+        ia_item = session.get_item(identifier)
         audio_file = None
         for f in ia_item.files:
             name = f.get("name", "")
@@ -65,6 +77,7 @@ for item in search:
                 audio_file = name
                 break
         if not audio_file:
+            print(f"No audio file found in {identifier}, skipping.")
             continue
 
         encoded_file = urllib.parse.quote(audio_file)
@@ -73,7 +86,7 @@ for item in search:
         print(f"Skipping {identifier}: {e}")
         continue
 
-    # 3. YouTube प्लेलिस्ट के टाइटल से मैच करें ताकि सही Thumbnail और Duration मिल सके
+    # 3. टाइटल मैचिंग (भले ही || न लगा हो, साफ किए गए शब्दों से मैच करेगा)
     clean_ia = clean_text(ia_title)
     best_match = None
     best_score = 0.0
@@ -86,18 +99,16 @@ for item in search:
             best_score = score
             best_match = yt
 
-    # अगर 60% से ज़्यादा टाइटल मैच होता है, तो YouTube का थंबनेल और ड्यूरेशन लगाएं
-    if best_match and best_score >= 0.60:
+    if best_match and best_score >= 0.50:
         thumbnail = best_match["thumbnail"]
         duration = best_match["duration"]
         vid = best_match["video_id"]
-        print(f"Matched '{ia_title}' -> YouTube ID {vid} (Score: {best_score:.2f})")
+        print(f"Matched '{ia_title}' -> YT ID {vid} (Score: {best_score:.2f})")
     else:
-        # मैच न होने पर Archive का डिफ़ॉल्ट थंबनेल इस्तेमाल करें
         thumbnail = f"https://archive.org/services/img/{identifier}"
         duration = ""
         vid = identifier
-        print(f"No YT match for '{ia_title}', using Archive defaults.")
+        print(f"No YT match for '{ia_title}' (Best score: {best_score:.2f}), using Archive defaults.")
 
     episodes.append({
         "video_id": vid,
