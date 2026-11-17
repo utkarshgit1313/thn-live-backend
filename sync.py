@@ -3,11 +3,16 @@ import json
 import subprocess
 import internetarchive as ia
 
-PLAYLIST_URL = os.environ.get("PLAYLIST_URL")
-ACCESS_KEY = os.environ.get("ARCHIVE_ACCESS_KEY")
-SECRET_KEY = os.environ.get("ARCHIVE_SECRET_KEY")
+PLAYLIST_URL = os.environ.get("PLAYLIST_URL", "").strip()
+ACCESS_KEY = os.environ.get("ARCHIVE_ACCESS_KEY", "").strip()
+SECRET_KEY = os.environ.get("ARCHIVE_SECRET_KEY", "").strip()
 EPISODES_FILE = "episodes.json"
-COOKIE_ARGS = ["--cookies", "cookies.txt"] if os.path.exists("cookies.txt") else []
+
+cookie_exists = os.path.exists("cookies.txt") and os.path.getsize("cookies.txt") > 10
+print(f"Cookie file ready: {cookie_exists}")
+print(f"Playlist URL length: {len(PLAYLIST_URL)}")
+
+COOKIE_ARGS = ["--cookies", "cookies.txt"] if cookie_exists else []
 
 if os.path.exists(EPISODES_FILE):
     with open(EPISODES_FILE, "r", encoding="utf-8") as f:
@@ -27,14 +32,19 @@ cmd = [
 ]
 result = subprocess.run(cmd, capture_output=True, text=True)
 if result.returncode != 0:
-    print("Error fetching playlist:", result.stderr)
+    print("ERROR fetching playlist:", result.stderr)
     exit(1)
 
 playlist_data = json.loads(result.stdout)
 entries = playlist_data.get("entries", [])
+print(f"Total entries found in playlist: {len(entries)}")
+
+if not entries:
+    print("Raw output:", result.stdout[:500])
 
 for entry in reversed(entries):
     vid = entry.get("id")
+    print(f"Checking video ID: {vid}")
     if not vid or vid in uploaded_ids:
         continue
 
@@ -44,7 +54,7 @@ for entry in reversed(entries):
     info_cmd = ["yt-dlp", *COOKIE_ARGS, "-j", video_url]
     info_res = subprocess.run(info_cmd, capture_output=True, text=True)
     if info_res.returncode != 0:
-        print(f"Skipping {vid}: {info_res.stderr}")
+        print(f"ERROR getting video info for {vid}: {info_res.stderr}")
         continue
 
     info = json.loads(info_res.stdout)
@@ -64,7 +74,10 @@ for entry in reversed(entries):
         "-o", f"{vid}.%(ext)s",
         video_url
     ]
-    subprocess.run(dl_cmd, check=True)
+    dl_res = subprocess.run(dl_cmd, capture_output=True, text=True)
+    if dl_res.returncode != 0:
+        print(f"ERROR downloading {vid}: {dl_res.stderr}")
+        continue
 
     identifier = f"thn-live-{vid}"
     metadata = {
