@@ -14,8 +14,32 @@ SECRET_KEY = os.environ.get("ARCHIVE_SECRET_KEY", "").strip()
 EPISODES_FILE = "episodes.json"
 ARCHIVE_USERNAME = "utkarsh_prajapati383"
 
+
 def clean_text(text):
-    return re.sub(r'\s+', ' ', re.sub(r'[^\w\s\u0900-\u097F]', ' ', text)).strip().lower()
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s\u0900-\u097F]", " ", text)).strip().lower()
+
+
+def get_best_thumbnail(vid, fallback_url=""):
+    """Returns highest available YouTube thumbnail URL for a video ID."""
+    candidates = [
+        f"https://i.ytimg.com/vi/{vid}/maxresdefault.jpg",
+        f"https://i.ytimg.com/vi/{vid}/sddefault.jpg",
+        f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
+    ]
+    for url in candidates:
+        try:
+            req = urllib.request.Request(
+                url,
+                method="HEAD",
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                if resp.status == 200:
+                    return url
+        except Exception:
+            continue
+    return fallback_url or f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+
 
 # 1. YouTube प्लेलिस्ट के सभी वीडियो और उनकी Exact Date & Time लें
 yt_videos = {}
@@ -31,7 +55,8 @@ if PLAYLIST_URL:
                 continue
 
             thumbs = entry.get("thumbnails") or []
-            thumb_url = thumbs[-1]["url"] if thumbs else f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+            raw_thumb = thumbs[-1]["url"] if thumbs else f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+            thumb_url = get_best_thumbnail(vid, raw_thumb)
 
             dur_sec = entry.get("duration")
             duration_str = ""
@@ -50,8 +75,10 @@ if PLAYLIST_URL:
                 "thumbnail": thumb_url,
                 "duration": duration_str,
                 "date": iso_date,
-                "playlist_order": idx
+                "playlist_order": idx,
             }
+    else:
+        print(f"yt-dlp warning: {res.stderr.strip()}")
 
     # YouTube RSS Feed से Exact Publish Date & Time (घंटे और मिनट सहित) लें
     list_match = re.search(r"list=([a-zA-Z0-9_-]+)", PLAYLIST_URL)
@@ -60,7 +87,10 @@ if PLAYLIST_URL:
         try:
             xml_data = urllib.request.urlopen(rss_url, timeout=15).read()
             root = ET.fromstring(xml_data)
-            ns = {"atom": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015"}
+            ns = {
+                "atom": "http://www.w3.org/2005/Atom",
+                "yt": "http://www.youtube.com/xml/schemas/2015",
+            }
             for entry in root.findall("atom:entry", ns):
                 vid_el = entry.find("yt:videoId", ns)
                 pub_el = entry.find("atom:published", ns)
@@ -75,13 +105,15 @@ print(f"Fetched {len(yt_videos)} valid videos from YouTube playlist.")
 identifiers = set()
 session = ia.get_session(config={"s3": {"access": ACCESS_KEY, "secret": SECRET_KEY}})
 
-# A) आपकी S3 Keys से सीधे आपके अकाउंट के Tasks/History से सारे अपलोड्स लाएं (तुरंत काम करता है, चाहे कोई भी नाम हो)
 try:
     tasks_url = "https://archive.org/services/tasks.php?limit=200&history=1"
-    req = urllib.request.Request(tasks_url, headers={
-        "Authorization": f"LOW {ACCESS_KEY}:{SECRET_KEY}",
-        "User-Agent": "THN-Live-Sync/1.0"
-    })
+    req = urllib.request.Request(
+        tasks_url,
+        headers={
+            "Authorization": f"LOW {ACCESS_KEY}:{SECRET_KEY}",
+            "User-Agent": "THN-Live-Sync/1.0",
+        },
+    )
     tasks_data = json.loads(urllib.request.urlopen(req, timeout=15).read().decode("utf-8"))
     for task in tasks_data.get("value", {}).get("history", []):
         if task.get("identifier"):
@@ -92,8 +124,10 @@ try:
 except Exception as e:
     print(f"Tasks API note: {e}")
 
-# B) साथ ही वही पुरानी सर्च भी रखें जिससे पहले आइटम मिले थे + Special Live के लिए भी
-search_query = f'uploader:"{ARCHIVE_USERNAME}" OR creator:"The Humility Nirankari" OR title:"The Humility Nirankari" OR title:"Sampurn Avtar Bani"'
+search_query = (
+    f'uploader:"{ARCHIVE_USERNAME}" OR creator:"The Humility Nirankari" '
+    f'OR title:"The Humility Nirankari" OR title:"Sampurn Avtar Bani"'
+)
 for item in session.search_items(search_query):
     if item.get("identifier"):
         identifiers.add(item["identifier"])
@@ -125,7 +159,7 @@ for identifier in identifiers:
         print(f"Skipping {identifier}: {e}")
         continue
 
-    # 3. Strict Playlist Filter: केवल YouTube प्लेलिस्ट वाले वीडियो ही जुड़ेंगे ('Story Time' बाहर हो जाएगा)
+    # 3. Strict Playlist Filter
     clean_ia = clean_text(ia_title)
     best_match = None
     best_score = 0.0
@@ -141,15 +175,17 @@ for identifier in identifiers:
     if best_match and best_score >= 0.60:
         matched_video_ids.add(best_match["video_id"])
         final_date = best_match["date"] or ia_item.metadata.get("publicdate", "")
-        episodes.append({
-            "video_id": best_match["video_id"],
-            "title": best_match["title"],
-            "date": final_date,
-            "duration": best_match["duration"],
-            "thumbnail": best_match["thumbnail"],
-            "audio_url": audio_url,
-            "_order": best_match["playlist_order"]
-        })
+        episodes.append(
+            {
+                "video_id": best_match["video_id"],
+                "title": best_match["title"],
+                "date": final_date,
+                "duration": best_match["duration"],
+                "thumbnail": best_match["thumbnail"],
+                "audio_url": audio_url,
+                "_order": best_match["playlist_order"],
+            }
+        )
         print(f"Matched [{best_score:.2f}]: '{ia_title}' -> '{best_match['title']}' ({final_date})")
     else:
         print(f"Ignored (Not in playlist): '{ia_title}' (Best score: {best_score:.2f})")
@@ -159,7 +195,9 @@ episodes.sort(key=lambda x: (x["date"] or "", -x["_order"]), reverse=True)
 for ep in episodes:
     ep.pop("_order", None)
 
-with open(EPISODES_FILE, "w", encoding="utf-8") as f:
-    json.dump(episodes, f, ensure_ascii=False, indent=2)
-
-print(f"Successfully saved {len(episodes)} filtered & sorted episodes to {EPISODES_FILE}!")
+if episodes or not os.path.exists(EPISODES_FILE):
+    with open(EPISODES_FILE, "w", encoding="utf-8") as f:
+        json.dump(episodes, f, ensure_ascii=False, indent=2)
+    print(f"Successfully saved {len(episodes)} filtered & sorted episodes to {EPISODES_FILE}!")
+else:
+    print("No episodes matched in this run; keeping existing episodes.json intact.")
